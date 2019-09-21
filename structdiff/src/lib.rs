@@ -1,25 +1,57 @@
 use std::fmt::Debug;
 
-pub trait Diff: Debug {
-    type Changeset: Debug;
-    type Action: Debug;
+pub trait Diff: Debug
+where
+    Self: Sized,
+{
+    type Changeset: Debug + Apply<Self>;
+    type Action: Debug + Apply<Self>;
 
-    fn changeset(&self, other: &Self) -> Field<Self, Self::Changeset, Self::Action>
-    where
-        Self: Sized;
+    fn changeset(&self, other: &Self) -> Field<Self, Self::Changeset, Self::Action>;
+}
+
+pub trait Apply<T: Sized>: Debug {
+    fn apply(self, target: &mut T);
+}
+
+impl<T> Apply<T> for () {
+    #[inline(always)]
+    fn apply(self, _target: &mut T) {}
 }
 
 #[derive(Debug)]
-pub enum Field<V, K, A> {
+pub enum Field<V, K, A>
+where
+    K: Apply<V>,
+    A: Apply<V>,
+{
     None,
     Set(V),
     Changes(K),
     Actions(Vec<A>),
 }
 
-type SetField<V, K> = Field<V, K, ()>;
+impl<V, K, A> Apply<V> for Field<V, K, A>
+where
+    V: Debug,
+    K: Debug + Apply<V>,
+    A: Apply<V>,
+{
+    fn apply(self, target: &mut V) {
+        match self {
+            Field::None => {}
+            Field::Set(value) => {
+                *target = value;
+            }
+            Field::Changes(changeset) => changeset.apply(target),
+            Field::Actions(actions) => {
+                actions.into_iter().for_each(|x| x.apply(target));
+            }
+        }
+    }
+}
 
-impl<V, K, A> std::default::Default for Field<V, K, A> {
+impl<V, K: Apply<V>, A: Apply<V>> std::default::Default for Field<V, K, A> {
     fn default() -> Self {
         Field::None
     }
@@ -68,7 +100,7 @@ macro_rules! impl_scalar_ref {
 use types::*;
 
 pub mod types {
-    use super::{Diff, Field};
+    use super::{Apply, Diff, Field};
 
     impl_scalar!(i8);
     pub type I8Changeset = ();
@@ -128,13 +160,52 @@ pub mod types {
         Append(Vec<T>),
     }
 
+    impl<T: Diff> Apply<Vec<T>> for VecAction<T> {
+        fn apply(self, target: &mut Vec<T>) {
+            use VecAction::*;
+
+            match self {
+                Set(index, field) => {
+                    field.apply(&mut target[index]);
+                }
+                Push(value) => target.push(value),
+                Truncate(len) => target.truncate(len),
+                Append(mut items) => target.append(&mut items),
+            }
+        }
+    }
+
     #[derive(Debug)]
     pub struct VecChangeset<T: Diff>(Field<T, <T as Diff>::Changeset, <T as Diff>::Action>);
+
+    impl<T: Diff> Apply<Vec<T>> for VecChangeset<T> {
+        fn apply(self, target: &mut Vec<T>) {}
+    }
 
     #[derive(Debug)]
     pub enum OptionChangeset<T: Diff> {
         NoneChangeset(Field<(), (), ()>),
         SomeChangeset(Field<T, <T as Diff>::Changeset, <T as Diff>::Action>),
+    }
+
+    impl<T: Diff> Apply<Option<T>> for OptionChangeset<T> {
+        fn apply(self, target: &mut Option<T>) {
+            use OptionChangeset::*;
+
+            match self {
+                NoneChangeset(_) => {
+                    *target = None;
+                }
+                SomeChangeset(value) => match target.iter_mut().next() {
+                    Some(v) => {
+                        value.apply(v);
+                    }
+                    None => {
+                        unreachable!("This is a logic error.");
+                    }
+                },
+            }
+        }
     }
 
     impl<T: Diff + PartialEq + Clone> Diff for Option<T> {
@@ -161,8 +232,25 @@ pub mod types {
 
     #[derive(Debug)]
     pub enum ResultChangeset<T: Diff, E: Diff> {
-        Ok(Field<T, <T as Diff>::Changeset, <T as Diff>::Action>),
-        Err(Field<E, <E as Diff>::Changeset, <E as Diff>::Action>),
+        OkChangeset(Field<T, <T as Diff>::Changeset, <T as Diff>::Action>),
+        ErrChangeset(Field<E, <E as Diff>::Changeset, <E as Diff>::Action>),
+    }
+
+    impl<T: Diff, E: Diff> Apply<Result<T, E>> for ResultChangeset<T, E> {
+        fn apply(self, target: &mut Result<T, E>) {
+            use ResultChangeset::*;
+
+            match self {
+                OkChangeset(x) => match target.as_mut() {
+                    Ok(inner) => x.apply(inner),
+                    _ => unreachable!("Logic error"),
+                },
+                ErrChangeset(x) => match target.as_mut() {
+                    Err(inner) => x.apply(inner),
+                    _ => unreachable!("Logic error"),
+                },
+            }
+        }
     }
 
     impl<T, E> Diff for Result<T, E>
@@ -182,8 +270,8 @@ pub mod types {
             }
 
             let changes = match (self, other) {
-                (Ok(a), Ok(b)) => ResultChangeset::Ok(a.changeset(&b)),
-                (Err(a), Err(b)) => ResultChangeset::Err(a.changeset(&b)),
+                (Ok(a), Ok(b)) => ResultChangeset::OkChangeset(a.changeset(&b)),
+                (Err(a), Err(b)) => ResultChangeset::ErrChangeset(a.changeset(&b)),
                 (_, v) => return Field::Set(v.to_owned()),
             };
 
@@ -230,6 +318,8 @@ where
 mod tests {
     use super::*;
 
+    type SetField<A, B> = Field<A, B, ()>;
+
     #[derive(Debug, PartialEq, Clone)]
     enum SomeEnum {
         None,
@@ -252,6 +342,37 @@ mod tests {
         Field2(SetField<u32, U32Changeset>),
         Field3(SetField<Bar, BarChangeset>),
         Field4(SetField<u16, U16Changeset>, SetField<u16, U16Changeset>),
+    }
+
+    impl Apply<SomeEnum> for SomeEnumChangeset {
+        fn apply(self, target: &mut SomeEnum) {
+            use SomeEnumChangeset::*;
+
+            match self {
+                None(_) => {
+                    *target = SomeEnum::None;
+                }
+                Field1(field) => match target {
+                    SomeEnum::Field1(target) => field.apply(target),
+                    _ => unreachable!("logic error"),
+                },
+                Field2(field) => match target {
+                    SomeEnum::Field2(target) => field.apply(target),
+                    _ => unreachable!("logic error"),
+                },
+                Field3(field) => match target {
+                    SomeEnum::Field3(target) => field.apply(target),
+                    _ => unreachable!("logic error"),
+                },
+                Field4(a, b) => match target {
+                    SomeEnum::Field4(t1, t2) => {
+                        a.apply(t1);
+                        b.apply(t2);
+                    }
+                    _ => unreachable!("logic error"),
+                },
+            }
+        }
     }
 
     #[derive(Debug, Default, PartialEq)]
@@ -354,9 +475,26 @@ mod tests {
         vec: Field<Vec<String>, VecChangeset<String>, VecAction<String>>,
     }
 
+    impl Apply<Foo> for FooChangeset {
+        fn apply(self, target: &mut Foo) {
+            self.field_a.apply(&mut target.field_a);
+            self.field_b.apply(&mut target.field_b);
+            self.enumer.apply(&mut target.enumer);
+            self.bar1.apply(&mut target.bar1);
+            self.bar.apply(&mut target.bar);
+            self.vec.apply(&mut target.vec);
+        }
+    }
+
     #[derive(Debug, Default)]
     struct BarChangeset {
         field_d: SetField<String, StringChangeset>,
+    }
+
+    impl Apply<Bar> for BarChangeset {
+        fn apply(self, target: &mut Bar) {
+            self.field_d.apply(&mut target.field_d);
+        }
     }
 
     #[test]
@@ -380,6 +518,12 @@ mod tests {
         f.vec = vec!["A".into(), "B".into(), "C".into(), "D".into(), "D".into()];
 
         // f.bar = Some(Bar { field_d: "AOWIJEWIOAJE".into() });
-        println!("{:#?}", g.changeset(&f));
+        let changeset = g.changeset(&f);
+        println!("{:#?}", &changeset);
+
+        changeset.apply(&mut g);
+        println!("{:#?}", &g);
+
+        assert_eq!(&f, &g);
     }
 }
