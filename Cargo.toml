@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "structdiff",
+    "structdiff-macro",
+    "structdiff-derive",
+]

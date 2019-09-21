@@ -1,0 +1,13 @@
+[package]
+name = "structdiff-derive"
+version = "0.1.0"
+authors = ["Brendan Molloy <brendan@technocreatives.com>"]
+edition = "2018"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+structdiff-macro = { path = "../structdiff-macro" }
+syn = "1.0.5"
+proc-macro2 = "1.0.3"

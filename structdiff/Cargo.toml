@@ -1,0 +1,11 @@
+[package]
+name = "structdiff"
+version = "0.1.0"
+authors = ["Brendan Molloy <brendan@technocreatives.com>"]
+edition = "2018"
+
+[dependencies]
+heck = "0.3.1"
+
+[dev-dependencies]
+structdiff-derive = { path = "../structdiff-derive"}
