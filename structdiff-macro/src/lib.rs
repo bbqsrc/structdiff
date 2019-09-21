@@ -31,6 +31,14 @@ fn gen_changes(field: &syn::Field) -> TokenStream {
     }
 }
 
+fn gen_applies(field: &syn::Field) -> TokenStream {
+    let field_name = &field.ident;
+
+    quote! {
+        self.#field_name.apply(&mut target.#field_name);
+    }
+}
+
 fn gen_impl_diff(ty: &syn::Ident, fields: &Punctuated<syn::Field, syn::Token![,]>) -> TokenStream {
     let change_items = fields.iter().map(gen_changes);
     let changeset_ident = gen_changeset_ident(&ty);
@@ -53,6 +61,19 @@ fn gen_impl_diff(ty: &syn::Ident, fields: &Punctuated<syn::Field, syn::Token![,]
                 #(#change_items)*
 
                 structdiff::Field::Changes(changes)
+            }
+        }
+    }
+}
+
+fn gen_impl_apply(ty: &syn::Ident, fields: &Punctuated<syn::Field, syn::Token![,]>) -> TokenStream {
+    let apply_items = fields.iter().map(gen_applies);
+    let changeset_ident = gen_changeset_ident(&ty);
+
+    quote! {
+        impl structdiff::Apply<#ty> for #changeset_ident {
+            fn apply(self, target: &mut #ty) {
+                #(#apply_items)*
             }
         }
     }
@@ -151,6 +172,7 @@ pub fn derive(input: DeriveInput) -> Result<TokenStream, syn::Error> {
     };
 
     let diff_impl = gen_impl_diff(&input.ident, &fields);
+    let apply_impl = gen_impl_apply(&input.ident, &fields);
     let changeset_struct = gen_changeset_struct(&input.ident, &fields)?;
 
     let output = quote! {
@@ -159,6 +181,7 @@ pub fn derive(input: DeriveInput) -> Result<TokenStream, syn::Error> {
 
         #changeset_struct
         #diff_impl
+        #apply_impl
     };
 
     Ok(output)
