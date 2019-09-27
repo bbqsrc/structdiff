@@ -131,7 +131,7 @@ fn gen_changeset_struct(
                 quote! { () }
             };
 
-            Ok(quote! { #ident : structdiff::Field<#ty, #ty_changeset, #ty_action> })
+            Ok(quote! { pub #ident : structdiff::Field<#ty, #ty_changeset, #ty_action> })
         })
         .collect::<Result<Vec<_>, _>>()?;
 
